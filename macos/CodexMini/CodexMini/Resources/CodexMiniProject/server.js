@@ -6098,11 +6098,19 @@ function cdpSideChatDomHelpersSource() {
   return `
     const visible = ${cdpVisibleHelperSource()};
     const normalize = text => String(text || '').replace(/\\s+/g, ' ').trim();
+    const cleanMessageText = text => String(text || '')
+      .replace(/\\r\\n?/g, '\\n')
+      .split('\\n')
+      .map(line => line.replace(/[\\t ]+/g, ' ').trim())
+      .join('\\n')
+      .replace(/\\n{3,}/g, '\\n\\n')
+      .trim();
     const attrText = el => [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('placeholder'), el.getAttribute('data-testid'), el.getAttribute('data-state'), el.id, el.className].join(' ');
     const sidePattern = /(?:\\bside\\b|side\\s*chat|side\\s*conversation|\\/side|侧边聊天|侧聊|侧边对话|旁路聊天|边聊)/i;
     const mainComposerPattern = /发消息给\\s*Codex\\s*Mini|发送给\\s*Codex\\s*Mini|Codex Mini By Coming Rain/i;
     const controlSelector = 'button,[role="button"],[role="menuitem"],[role="option"],textarea,input,[contenteditable="true"],.ProseMirror,select';
     const editorSelector = '.ProseMirror,[contenteditable="true"],textarea,input[role="textbox"],input[type="text"],input:not([type])';
+    const contentBlockSelector = 'p,li,pre,blockquote,h1,h2,h3,h4,h5,h6';
     const rectOf = el => {
       const rect = el.getBoundingClientRect();
       return { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) };
@@ -6121,18 +6129,56 @@ function cdpSideChatDomHelpersSource() {
       const bottomWideComposer = rect.y > Math.max(420, window.innerHeight - 190) && rect.width > Math.min(520, window.innerWidth * 0.35);
       return mainComposerPattern.test(text) || bottomWideComposer || (rect.y > window.innerHeight * 0.58 && rect.x < window.innerWidth * 0.70 && rect.width > Math.min(520, window.innerWidth * 0.35));
     };
+    const sideTabKeyFor = (tab, index) => tab.getAttribute('id')
+      || tab.getAttribute('aria-controls')
+      || normalize(tab.innerText || tab.textContent)
+      || String(index);
     const readSideTabs = root => {
       if (!root) return [];
       return [...root.querySelectorAll('[role="tab"]')]
         .filter(visible)
-        .map((tab, index) => ({
-          id: tab.getAttribute('id') || tab.getAttribute('aria-controls') || String(index),
-          index,
-          title: normalize(tab.innerText || tab.textContent).slice(0, 160) || ('侧聊 ' + (index + 1)),
-          selected: tab.getAttribute('aria-selected') === 'true',
-          rect: rectOf(tab),
-        }))
+        .map((tab, index) => {
+          const title = normalize(tab.innerText || tab.textContent).slice(0, 160) || ('侧聊 ' + (index + 1));
+          const key = sideTabKeyFor(tab, index);
+          return {
+            id: key,
+            key,
+            index,
+            title,
+            selected: tab.getAttribute('aria-selected') === 'true',
+            rect: rectOf(tab),
+          };
+        })
         .filter(item => item.title);
+    };
+    const selectSideTab = (root, requestedKey = '') => {
+      const key = normalize(requestedKey);
+      if (!root || !key) return { ok: true, skipped: true };
+      const tabs = [...root.querySelectorAll('[role="tab"]')].filter(visible);
+      const tab = tabs.find((item, index) => {
+        const title = normalize(item.innerText || item.textContent);
+        const values = [
+          sideTabKeyFor(item, index),
+          item.getAttribute('id') || '',
+          item.getAttribute('aria-controls') || '',
+          title,
+          String(index),
+          'index:' + index,
+        ].map(normalize);
+        return values.includes(key);
+      }) || null;
+      if (!tab) return { ok: false, reason: '找不到这个侧聊标签', requestedKey: key, tabs: readSideTabs(root) };
+      const index = tabs.indexOf(tab);
+      const alreadySelected = tab.getAttribute('aria-selected') === 'true';
+      if (!alreadySelected) tab.click();
+      return {
+        ok: true,
+        skipped: alreadySelected,
+        clicked: !alreadySelected,
+        key: sideTabKeyFor(tab, index),
+        index,
+        title: normalize(tab.innerText || tab.textContent).slice(0, 160),
+      };
     };
     const sideTextPreview = root => {
       if (!root) return '';
@@ -6207,6 +6253,20 @@ function cdpSideChatDomHelpersSource() {
       const rect = el.getBoundingClientRect();
       return rect.left > window.innerWidth * 0.58 ? 'user' : 'assistant';
     };
+    const sideMessageText = el => {
+      const blocks = [...el.querySelectorAll(contentBlockSelector)]
+        .filter(visible)
+        .filter(block => !block.closest(controlSelector))
+        .map(block => {
+          const text = cleanMessageText(block.innerText || block.textContent || '');
+          if (!text) return '';
+          if (block.tagName === 'LI') return '- ' + text.replace(/^[-*]\\s+/, '');
+          return text;
+        })
+        .filter(Boolean);
+      if (blocks.length >= 2) return blocks.join('\\n\\n');
+      return cleanMessageText(el.innerText || el.textContent || '');
+    };
     const readSideMessages = root => {
       if (!root) return [];
       const panel = root.querySelector('[role="tabpanel"]') || root;
@@ -6218,7 +6278,7 @@ function cdpSideChatDomHelpersSource() {
         .filter(el => !el.closest(controlSelector));
       const blocks = [...specific, ...fallback]
         .map(el => {
-          const text = normalize(el.innerText || el.textContent || '');
+          const text = sideMessageText(el);
           const aria = normalize(el.getAttribute('aria-label') || '');
           const raw = normalize([aria, el.getAttribute('data-message-author-role'), el.getAttribute('data-role'), el.className].join(' ')).toLowerCase();
           let role = '';
@@ -6242,7 +6302,7 @@ function cdpSideChatDomHelpersSource() {
         if (seen.has(key)) continue;
         if (deduped.some(prev => prev.role === item.role && prev.text.includes(item.text) && prev.text.length > item.text.length + 12)) continue;
         seen.add(key);
-        deduped.push({ role: item.role, text: item.text.slice(0, 4000), rect: rectOf(item.el) });
+        deduped.push({ role: item.role, text: item.text.slice(0, 6000), rect: rectOf(item.el) });
       }
       return deduped.slice(-40);
     };
@@ -6277,30 +6337,38 @@ function cdpSideChatDomHelpersSource() {
   `;
 }
 
-async function cdpReadCodexSideState(threadId = '') {
+async function cdpReadCodexSideState(threadId = '', sideTab = '') {
   return withCodexCdp(async client => {
     let selected = { ok: true, skipped: true };
     if (threadId) selected = await cdpClickThread(client, threadId);
-    const state = await cdpEvaluate(client, `(() => {
+    const state = await cdpEvaluate(client, `(async () => {
+      const requestedSideTab = ${jsLiteral(String(sideTab || '').slice(0, 240))};
       ${cdpSideChatDomHelpersSource()}
-      return sideSnapshot();
+      const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+      const root = findSideRoot();
+      const selectedSideTab = selectSideTab(root, requestedSideTab);
+      if (selectedSideTab.clicked) await sleep(180);
+      return { ...sideSnapshot(), selectedSideTab };
     })()`);
-    return { ...state, selected, threadId };
+    return { ...state, selected, threadId, sideTab };
   });
 }
 
-async function cdpSendCodexSideChat(text, threadId = '') {
+async function cdpSendCodexSideChat(text, threadId = '', sideTab = '') {
   return withCodexCdp(async client => {
     let selected = { ok: true, skipped: true };
     if (threadId) selected = await cdpClickThread(client, threadId);
     const result = await cdpEvaluate(client, `(async () => {
       const textValue = ${jsLiteral(String(text || '').slice(0, MAX_TEXT_LENGTH))};
+      const requestedSideTab = ${jsLiteral(String(sideTab || '').slice(0, 240))};
       ${cdpSideChatDomHelpersSource()}
       const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
       const root = findSideRoot();
+      const selectedSideTab = selectSideTab(root, requestedSideTab);
+      if (selectedSideTab.clicked) await sleep(180);
       const editor = findSideEditor(root);
       if (!root || !editor) {
-        return { ok: false, code: 'SIDE_COMPOSER_MISSING', reason: root ? '找不到侧聊输入框' : '侧聊面板未打开', state: sideSnapshot() };
+        return { ok: false, code: 'SIDE_COMPOSER_MISSING', reason: root ? '找不到侧聊输入框' : '侧聊面板未打开', selectedSideTab, state: sideSnapshot() };
       }
       const setEditorText = el => {
         el.focus();
@@ -6344,11 +6412,11 @@ async function cdpSendCodexSideChat(text, threadId = '') {
       const button = buttons[0]?.score >= 35 ? buttons[0] : null;
       if (button) {
         button.button.click();
-        return { ok: true, method: 'side-direct-click', clicked: { label: button.label, rect: button.rect }, state: sideSnapshot() };
+        return { ok: true, method: 'side-direct-click', selectedSideTab, clicked: { label: button.label, rect: button.rect }, state: sideSnapshot() };
       }
       editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
       editor.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-      return { ok: true, method: 'side-direct-enter', needNativeEnter: true, state: sideSnapshot() };
+      return { ok: true, method: 'side-direct-enter', selectedSideTab, needNativeEnter: true, state: sideSnapshot() };
     })()`);
     if (!result || !result.ok) {
       const error = new Error(result?.reason || '侧聊输入框不可用');
@@ -6363,11 +6431,11 @@ async function cdpSendCodexSideChat(text, threadId = '') {
     } else {
       await delay(CODEX_COMMAND_SETTLE_MS);
     }
-    return { ...result, selected, threadId };
+    return { ...result, selected, threadId, sideTab };
   });
 }
 
-async function sendCodexSideChat(text, threadId = '') {
+async function sendCodexSideChat(text, threadId = '', sideTab = '') {
   if (!CODEX_SIDE_DOM_ENABLED) {
     const fallbackText = `/side ${String(text || '').trim()}`;
     const fallback = await pasteAndEnter(fallbackText, 'codex', [], threadId, { assumeThreadSynced: false });
@@ -6382,7 +6450,7 @@ async function sendCodexSideChat(text, threadId = '') {
     };
   }
   try {
-    const direct = await cdpSendCodexSideChat(text, threadId);
+    const direct = await cdpSendCodexSideChat(text, threadId, sideTab);
     return {
       ok: true,
       method: direct.method || 'side-direct',
@@ -7354,6 +7422,7 @@ async function handleCodexSideState(req, res) {
   try {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const threadId = url.searchParams.get('thread') || '';
+    const sideTab = String(url.searchParams.get('sideTab') || '').slice(0, 240);
     if (threadId && !isCodexThreadId(threadId)) {
       return json(res, 400, { ok: false, code: 'BAD_THREAD_ID', message: '线程 ID 不正确。' });
     }
@@ -7366,11 +7435,12 @@ async function handleCodexSideState(req, res) {
         canSendDirect: false,
         messages: [],
         threadId,
+        sideTab,
         experimentalDomDisabled: true,
         message: '侧聊 DOM 映射处于实验关闭状态；发送会使用 /side 指令。',
       });
     }
-    const state = await cdpReadCodexSideState(threadId);
+    const state = await cdpReadCodexSideState(threadId, sideTab);
     return json(res, 200, {
       ...state,
       ok: true,
@@ -7396,6 +7466,7 @@ async function handleCodexSideSend(req, res) {
 
   const text = typeof payload.text === 'string' ? payload.text : '';
   const threadId = typeof payload.threadId === 'string' ? payload.threadId : '';
+  const sideTab = typeof payload.sideTab === 'string' ? payload.sideTab.slice(0, 240) : '';
   if (threadId && !isCodexThreadId(threadId)) {
     return json(res, 400, { ok: false, code: 'BAD_THREAD_ID', message: '线程 ID 不正确。' });
   }
@@ -7410,10 +7481,11 @@ async function handleCodexSideSend(req, res) {
   }
 
   try {
-    const result = await sendCodexSideChat(text, threadId);
+    const result = await sendCodexSideChat(text, threadId, sideTab);
     return json(res, 200, {
       ...result,
       threadId,
+      sideTab,
       sentAt: new Date().toISOString(),
     });
   } catch (error) {

@@ -1623,8 +1623,7 @@
       visibility: hidden;
     }
     .chat-channel-switch {
-      position: sticky;
-      top: 0;
+      position: relative;
       z-index: 6;
       width: fit-content;
       max-width: 100%;
@@ -1682,6 +1681,42 @@
     }
     .side-refresh-btn:disabled { opacity: .38; }
     body:not(.side-channel) .side-refresh-btn { visibility: hidden; }
+    .side-tab-strip {
+      width: 100%;
+      max-width: min(760px, 100%);
+      margin: 0 auto 14px;
+      display: flex;
+      gap: 7px;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+    .side-tab-strip::-webkit-scrollbar { display: none; }
+    .side-tab-btn {
+      flex: 0 0 auto;
+      max-width: min(62vw, 260px);
+      height: 30px;
+      appearance: none;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 999px;
+      padding: 0 11px;
+      background: rgba(255,255,255,.045);
+      color: var(--muted);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      touch-action: manipulation;
+    }
+    .side-tab-btn.is-active {
+      color: var(--text);
+      background: rgba(255,255,255,.11);
+      border-color: rgba(255,255,255,.16);
+    }
     .day-note {
       width: fit-content;
       margin: 0 auto 20px;
@@ -2717,6 +2752,7 @@
     const ROUTE_STORAGE_KEY = 'codexMini.apiRoutes.v1';
     const CONTEXT_DISPLAY_MODE_STORAGE_KEY = 'codexMini.contextDisplayMode.v1';
     const CHAT_CHANNEL_STORAGE_KEY = 'codexMini.chatChannel.v1';
+    const SIDE_TAB_STORAGE_KEY = 'codexMini.selectedSideTab.v1';
     const normalizeBaseUrl = value => String(value || '').trim().replace(/\/+$/, '');
     const currentApiBase = normalizeBaseUrl(`${location.origin}${basePath}`);
     let apiCandidates = [];
@@ -2730,6 +2766,7 @@
     let selectedThreadId = queryThreadId || localStorage.getItem('codexMini.selectedThread') || '';
     if (queryThreadId) localStorage.setItem('codexMini.selectedThread', queryThreadId);
     let chatChannel = localStorage.getItem(CHAT_CHANNEL_STORAGE_KEY) === 'side' ? 'side' : 'main';
+    let selectedSideTabKey = localStorage.getItem(SIDE_TAB_STORAGE_KEY) || '';
     let pendingNewThread = null;
     let knownThreads = [];
     let pollTimer = null;
@@ -5618,6 +5655,7 @@
 
     function clearThreadMessages() {
       [...thread.querySelectorAll('.message')].forEach(node => node.remove());
+      [...thread.querySelectorAll('.side-tab-strip')].forEach(node => node.remove());
       clearQueuedSends();
     }
 
@@ -6518,6 +6556,52 @@
       }, delayMs);
     }
 
+    function sideTabKey(tab = {}) {
+      return String(tab.key || tab.id || tab.title || tab.index || '').trim();
+    }
+
+    function renderSideTabs(data = {}) {
+      const tabs = Array.isArray(data.tabs) ? data.tabs : [];
+      if (tabs.length <= 1) {
+        const selected = tabs.find(item => item.selected) || tabs[0] || null;
+        if (selected) {
+          selectedSideTabKey = sideTabKey(selected);
+          if (selectedSideTabKey) localStorage.setItem(SIDE_TAB_STORAGE_KEY, selectedSideTabKey);
+        }
+        return;
+      }
+
+      const selected = tabs.find(item => item.selected)
+        || tabs.find(item => sideTabKey(item) === selectedSideTabKey)
+        || tabs[0];
+      selectedSideTabKey = sideTabKey(selected);
+      if (selectedSideTabKey) localStorage.setItem(SIDE_TAB_STORAGE_KEY, selectedSideTabKey);
+
+      const strip = document.createElement('div');
+      strip.className = 'side-tab-strip';
+      strip.setAttribute('role', 'tablist');
+      strip.setAttribute('aria-label', '侧聊列表');
+      for (const tab of tabs) {
+        const key = sideTabKey(tab);
+        const button = document.createElement('button');
+        button.className = 'side-tab-btn';
+        button.type = 'button';
+        button.textContent = tab.title || `侧聊 ${Number(tab.index || 0) + 1}`;
+        button.title = button.textContent;
+        button.setAttribute('role', 'tab');
+        button.setAttribute('aria-selected', key && key === selectedSideTabKey ? 'true' : 'false');
+        button.classList.toggle('is-active', Boolean(key && key === selectedSideTabKey));
+        button.addEventListener('click', () => {
+          if (!key || key === selectedSideTabKey) return;
+          selectedSideTabKey = key;
+          localStorage.setItem(SIDE_TAB_STORAGE_KEY, selectedSideTabKey);
+          refreshSideChat({ force: true, quiet: false, skipSync: true }).catch(error => setNotice(error.message || '切换侧聊失败', 'error'));
+        });
+        strip.appendChild(button);
+      }
+      thread.appendChild(strip);
+    }
+
     function renderSideState(data = {}, options = {}) {
       clearThreadMessages();
       const messages = Array.isArray(data.messages) ? data.messages : [];
@@ -6525,6 +6609,7 @@
         messageEl('assistant', '当前 Codex 窗口没有打开侧聊面板。直接发送会打开侧聊。', { label: 'Codex 侧聊' });
         return;
       }
+      renderSideTabs(data);
       if (!messages.length) {
         messageEl('assistant', data.canSendDirect ? '侧聊面板已打开。' : '侧聊面板已打开，但暂时没有找到输入框。', { label: 'Codex 侧聊' });
         return;
@@ -6557,6 +6642,7 @@
         }
         const params = new URLSearchParams({ token });
         if (selectedThreadId) params.set('thread', selectedThreadId);
+        if (selectedSideTabKey) params.set('sideTab', selectedSideTabKey);
         const response = await fetchApi(`/codex/side-state?${params}`, { cache: 'no-store', apiTimeoutMs: 16000 });
         const data = await response.json().catch(() => ({}));
         if (requestId !== sideStateRequestId || chatChannel !== 'side') return;
@@ -7526,7 +7612,7 @@
         const response = await fetchApi('/codex/side-send', {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-mobile-typer-token': token },
-          body: JSON.stringify({ text, threadId: selectedThreadId }),
+          body: JSON.stringify({ text, threadId: selectedThreadId, sideTab: selectedSideTabKey }),
           apiTimeoutMs: 60000,
           routeSwitchQuiet: true,
           retryProbeTimeoutMs: 900,
