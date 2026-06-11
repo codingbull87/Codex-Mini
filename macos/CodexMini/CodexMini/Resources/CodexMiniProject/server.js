@@ -4200,6 +4200,59 @@ function cdpHostForUrl(host = CODEX_CDP_HOST) {
   return raw.includes(':') ? `[${raw}]` : raw;
 }
 
+function probeCodexCdpPage(page, timeoutMs = 700) {
+  if (typeof WebSocket !== 'function' || !page || !page.webSocketDebuggerUrl) return Promise.resolve(null);
+  return new Promise(resolve => {
+    let settled = false;
+    let ws = null;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { ws?.close(); } catch {}
+      resolve(value || null);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    try {
+      ws = new WebSocket(page.webSocketDebuggerUrl);
+      ws.onopen = () => {
+        const expression = `(() => {
+          const visible = el => {
+            const rect = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+          };
+          const sideOpen = [...document.querySelectorAll('aside,[role="dialog"],[role="complementary"]')]
+            .filter(visible)
+            .some(el => {
+              const rect = el.getBoundingClientRect();
+              if (rect.width < 240 || rect.height < 220) return false;
+              if (rect.left < Math.min(320, window.innerWidth * 0.25) && rect.width < window.innerWidth * 0.55) return false;
+              if (el.querySelector('[data-app-action-sidebar-thread-id],[data-app-action-sidebar-project-row]')) return false;
+              return Boolean(el.querySelector('[role="tablist"],[role="tabpanel"],.ProseMirror,[contenteditable="true"],textarea'));
+            });
+          return { focused: document.hasFocus(), href: location.href, sideOpen, title: document.title };
+        })()`;
+        ws.send(JSON.stringify({
+          id: 1,
+          method: 'Runtime.evaluate',
+          params: { expression, returnByValue: true, awaitPromise: true, timeout: Math.max(250, timeoutMs - 150) },
+        }));
+      };
+      ws.onmessage = event => {
+        let message = null;
+        try { message = JSON.parse(String(event.data || '{}')); } catch {}
+        if (!message || message.id !== 1) return;
+        finish(message.result && message.result.result && message.result.result.value);
+      };
+      ws.onerror = () => finish(null);
+      ws.onclose = () => finish(null);
+    } catch {
+      finish(null);
+    }
+  });
+}
+
 async function getCodexCdpPage() {
   const hostCandidates = [CODEX_CDP_HOST, '[::1]', '127.0.0.1', 'localhost']
     .map(cdpHostForUrl)
@@ -4208,7 +4261,17 @@ async function getCodexCdpPage() {
   for (const host of hostCandidates) {
     try {
       const targets = await fetchJsonWithTimeout(`http://${host}:${CODEX_CDP_PORT}/json/list`, Math.min(CODEX_CDP_TIMEOUT_MS, 1500));
-      const page = targets.find(target => target.type === 'page' && target.url === 'app://-/index.html')
+      const pageTargets = targets.filter(target => target.type === 'page' && target.webSocketDebuggerUrl);
+      const codexPages = pageTargets.filter(target => String(target.url || '').startsWith('app://-/index.html'));
+      const candidates = codexPages.length ? codexPages : pageTargets;
+      const probes = await Promise.all(candidates.slice(0, 8).map(async (page, index) => ({
+        page,
+        index,
+        probe: await probeCodexCdpPage(page, 700).catch(() => null),
+      })));
+      const focused = probes.find(item => item.probe && item.probe.focused);
+      const page = focused?.page
+        || targets.find(target => target.type === 'page' && target.url === 'app://-/index.html')
         || targets.find(target => target.type === 'page' && String(target.url || '').startsWith('app://-/index.html'))
         || targets.find(target => target.type === 'page');
       if (page && page.webSocketDebuggerUrl) return page;
