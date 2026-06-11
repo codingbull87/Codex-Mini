@@ -6556,7 +6556,7 @@
           await syncCodexThread(selectedThreadId, { force: Boolean(options.force), quiet: true }).catch(() => null);
         }
         const params = new URLSearchParams({ token });
-        if (options.syncThread && selectedThreadId) params.set('thread', selectedThreadId);
+        if (selectedThreadId) params.set('thread', selectedThreadId);
         const response = await fetchApi(`/codex/side-state?${params}`, { cache: 'no-store', apiTimeoutMs: 16000 });
         const data = await response.json().catch(() => ({}));
         if (requestId !== sideStateRequestId || chatChannel !== 'side') return;
@@ -7526,7 +7526,7 @@
         const response = await fetchApi('/codex/side-send', {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-mobile-typer-token': token },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({ text, threadId: selectedThreadId }),
           apiTimeoutMs: 60000,
           routeSwitchQuiet: true,
           retryProbeTimeoutMs: 900,

@@ -4231,7 +4231,7 @@ function probeCodexCdpPage(page, timeoutMs = 700) {
               if (el.querySelector('[data-app-action-sidebar-thread-id],[data-app-action-sidebar-project-row]')) return false;
               return Boolean(el.querySelector('[role="tablist"],[role="tabpanel"],.ProseMirror,[contenteditable="true"],textarea'));
             });
-          return { focused: document.hasFocus(), href: location.href, sideOpen, title: document.title };
+          return { focused: document.hasFocus(), hidden: document.hidden, href: location.href, sideOpen, title: document.title };
         })()`;
         ws.send(JSON.stringify({
           id: 1,
@@ -4270,7 +4270,9 @@ async function getCodexCdpPage() {
         probe: await probeCodexCdpPage(page, 700).catch(() => null),
       })));
       const focused = probes.find(item => item.probe && item.probe.focused);
+      const visible = probes.find(item => item.probe && item.probe.hidden === false);
       const page = focused?.page
+        || visible?.page
         || targets.find(target => target.type === 'page' && target.url === 'app://-/index.html')
         || targets.find(target => target.type === 'page' && String(target.url || '').startsWith('app://-/index.html'))
         || targets.find(target => target.type === 'page');
@@ -6278,7 +6280,7 @@ function cdpSideChatDomHelpersSource() {
 async function cdpReadCodexSideState(threadId = '') {
   return withCodexCdp(async client => {
     let selected = { ok: true, skipped: true };
-    if (threadId) selected = await cdpClickThread(client, threadId, { settleMs: 180 });
+    if (threadId) selected = await cdpClickThread(client, threadId);
     const state = await cdpEvaluate(client, `(() => {
       ${cdpSideChatDomHelpersSource()}
       return sideSnapshot();
@@ -6290,7 +6292,7 @@ async function cdpReadCodexSideState(threadId = '') {
 async function cdpSendCodexSideChat(text, threadId = '') {
   return withCodexCdp(async client => {
     let selected = { ok: true, skipped: true };
-    if (threadId) selected = await cdpClickThread(client, threadId, { settleMs: 180 });
+    if (threadId) selected = await cdpClickThread(client, threadId);
     const result = await cdpEvaluate(client, `(async () => {
       const textValue = ${jsLiteral(String(text || '').slice(0, MAX_TEXT_LENGTH))};
       ${cdpSideChatDomHelpersSource()}
