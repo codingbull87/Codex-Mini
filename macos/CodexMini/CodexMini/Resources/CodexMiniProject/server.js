@@ -24,7 +24,7 @@ const RELAY_BASES = RELAY_BASES_RAW
 const LOCAL_ONLY_MODE = process.env.CODEX_MINI_LOCAL_ONLY === '1';
 const BETA_MODE = process.env.CODEX_MINI_BETA === '1';
 const DISABLE_BETA_TUNNEL = process.env.CODEX_MINI_DISABLE_BETA_TUNNEL === '1';
-const FAST_THREAD_LIST = process.env.CODEX_MINI_FAST_THREAD_LIST === '1';
+const FAST_THREAD_LIST = process.env.CODEX_MINI_FAST_THREAD_LIST !== '0';
 const LICENSE_API_BASE = (process.env.CODEX_MINI_LICENSE_API_BASE || 'http://47.110.74.238').replace(/\/+$/, '');
 const BETA_RELAY_PUBLIC_BASE = (process.env.CODEX_MINI_BETA_RELAY_BASE || 'http://47.110.74.238/codex-mini-beta').replace(/\/+$/, '');
 const BETA_TUNNEL_BASE = (process.env.CODEX_MINI_BETA_TUNNEL_BASE || BETA_RELAY_PUBLIC_BASE).replace(/\/+$/, '');
@@ -72,6 +72,7 @@ const CODEX_COMMAND_SETTLE_MS = 180;
 const CODEX_CDP_HOST = process.env.CODEX_MINI_CDP_HOST || 'localhost';
 const CODEX_CDP_PORT = Number(process.env.CODEX_MINI_CDP_PORT || 39252);
 const CODEX_CDP_TIMEOUT_MS = Number(process.env.CODEX_MINI_CDP_TIMEOUT_MS || 5000);
+const CODEX_SIDE_DOM_ENABLED = process.env.CODEX_MINI_SIDE_DOM_ENABLED === '1';
 const CONTROLLED_CODEX_ABNORMAL_CODE = 'CONTROLLED_CODEX_ABNORMAL';
 const CONTROLLED_CODEX_ABNORMAL_MESSAGE = '受控 Codex 异常，请在电脑界面打开受控 Codex';
 const NORMAL_CODEX_EXECUTABLE_PATH = '/Applications/Codex.app/Contents/MacOS/Codex';
@@ -6090,6 +6091,7 @@ function cdpSideChatDomHelpersSource() {
         const rect = el.getBoundingClientRect();
         if (rect.width < 220 || rect.height < 120) continue;
         if (rect.width > window.innerWidth * 0.92 && rect.height > window.innerHeight * 0.85) continue;
+        if (rect.width > 900) continue;
         const rawAttr = attrText(el);
         const ownText = normalize([rawAttr, el.innerText || '', el.textContent || ''].join(' '));
         const editors = [...el.querySelectorAll(editorSelector)].filter(isEditor);
@@ -6101,7 +6103,6 @@ function cdpSideChatDomHelpersSource() {
         const compactPanel = rect.width <= Math.min(760, window.innerWidth * 0.52) || rect.left >= window.innerWidth * 0.56;
         const labeledSidePanel = sideAttrWords || (sideWords && compactPanel && (el.matches('[role="dialog"],[role="complementary"],aside') || rect.width <= window.innerWidth * 0.55 || rect.left >= window.innerWidth * 0.56));
         const hasUsefulText = ownText.length >= 18;
-        if (rect.width > 900) continue;
         if (!sideAttrWords && rect.width > Math.min(900, window.innerWidth * 0.62)) continue;
         if (!labeledSidePanel && !narrowRightEditablePanel) continue;
         let score = 0;
@@ -6310,6 +6311,19 @@ async function cdpSendCodexSideChat(text, threadId = '') {
 }
 
 async function sendCodexSideChat(text, threadId = '') {
+  if (!CODEX_SIDE_DOM_ENABLED) {
+    const fallbackText = `/side ${String(text || '').trim()}`;
+    const fallback = await pasteAndEnter(fallbackText, 'codex', [], threadId, { assumeThreadSynced: false });
+    return {
+      ok: true,
+      method: 'side-slash-fallback',
+      direct: false,
+      fallback: true,
+      directError: '',
+      result: fallback,
+      message: '已用 /side 指令打开并发送到 Codex 侧聊。',
+    };
+  }
   try {
     const direct = await cdpSendCodexSideChat(text, threadId);
     return {
@@ -7285,6 +7299,19 @@ async function handleCodexSideState(req, res) {
     const threadId = url.searchParams.get('thread') || '';
     if (threadId && !isCodexThreadId(threadId)) {
       return json(res, 400, { ok: false, code: 'BAD_THREAD_ID', message: '线程 ID 不正确。' });
+    }
+    if (!CODEX_SIDE_DOM_ENABLED) {
+      return json(res, 200, {
+        ok: true,
+        available: false,
+        sideOpen: false,
+        sideRunning: false,
+        canSendDirect: false,
+        messages: [],
+        threadId,
+        experimentalDomDisabled: true,
+        message: '侧聊 DOM 映射处于实验关闭状态；发送会使用 /side 指令。',
+      });
     }
     const state = await cdpReadCodexSideState(threadId);
     return json(res, 200, {
