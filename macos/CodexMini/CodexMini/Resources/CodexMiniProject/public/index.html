@@ -1622,6 +1622,66 @@
     .thread.is-history-rendering .message {
       visibility: hidden;
     }
+    .chat-channel-switch {
+      position: sticky;
+      top: 0;
+      z-index: 6;
+      width: fit-content;
+      max-width: 100%;
+      margin: 0 auto 18px;
+      padding: 3px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(58px, auto)) 34px;
+      align-items: center;
+      gap: 3px;
+      border: 1px solid rgba(255,255,255,.09);
+      border-radius: 15px;
+      background: rgba(13,13,13,.86);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      box-shadow: 0 8px 24px rgba(0,0,0,.16);
+    }
+    .chat-channel-btn {
+      appearance: none;
+      border: 0;
+      min-width: 58px;
+      height: 30px;
+      padding: 0 10px;
+      border-radius: 11px;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 760;
+      line-height: 1;
+      white-space: nowrap;
+      touch-action: manipulation;
+      cursor: pointer;
+    }
+    .chat-channel-btn.is-active {
+      color: var(--text);
+      background: rgba(255,255,255,.10);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.055);
+    }
+    .side-refresh-btn {
+      appearance: none;
+      border: 0;
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 11px;
+      background: transparent;
+      color: var(--faint);
+      font: inherit;
+      font-size: 15px;
+      font-weight: 780;
+      line-height: 1;
+      touch-action: manipulation;
+      cursor: pointer;
+    }
+    .side-refresh-btn:disabled { opacity: .38; }
+    body:not(.side-channel) .side-refresh-btn { visibility: hidden; }
     .day-note {
       width: fit-content;
       margin: 0 auto 20px;
@@ -2522,6 +2582,11 @@
     <div class="thread-menu" id="thread-menu" aria-label="选择 Codex 线程"></div>
 
     <main class="thread" id="thread" aria-label="聊天记录">
+      <div class="chat-channel-switch" id="chat-channel-switch" role="tablist" aria-label="聊天通道">
+        <button class="chat-channel-btn is-active" id="channel-main" type="button" role="tab" aria-selected="true" data-channel="main">主线</button>
+        <button class="chat-channel-btn" id="channel-side" type="button" role="tab" aria-selected="false" data-channel="side">侧聊</button>
+        <button class="side-refresh-btn" id="side-refresh" type="button" title="刷新侧聊" aria-label="刷新侧聊">↻</button>
+      </div>
       <div class="day-note">手机同步到当前 Codex 对话</div>
     </main>
 
@@ -2621,6 +2686,10 @@
     const threadRenameInput = document.getElementById('thread-rename-input');
     const threadRenameCancel = document.getElementById('thread-rename-cancel');
     const threadRenameSave = document.getElementById('thread-rename-save');
+    const channelSwitch = document.getElementById('chat-channel-switch');
+    const channelMainButton = document.getElementById('channel-main');
+    const channelSideButton = document.getElementById('channel-side');
+    const sideRefreshButton = document.getElementById('side-refresh');
     const queryParams = new URLSearchParams(location.search);
     const queryToken = queryParams.get('token') || '';
     const queryThreadParam = queryParams.get('thread') || '';
@@ -2647,6 +2716,7 @@
     const DEFAULT_RELAY_BASES = [];
     const ROUTE_STORAGE_KEY = 'codexMini.apiRoutes.v1';
     const CONTEXT_DISPLAY_MODE_STORAGE_KEY = 'codexMini.contextDisplayMode.v1';
+    const CHAT_CHANNEL_STORAGE_KEY = 'codexMini.chatChannel.v1';
     const normalizeBaseUrl = value => String(value || '').trim().replace(/\/+$/, '');
     const currentApiBase = normalizeBaseUrl(`${location.origin}${basePath}`);
     let apiCandidates = [];
@@ -2659,6 +2729,7 @@
 
     let selectedThreadId = queryThreadId || localStorage.getItem('codexMini.selectedThread') || '';
     if (queryThreadId) localStorage.setItem('codexMini.selectedThread', queryThreadId);
+    let chatChannel = localStorage.getItem(CHAT_CHANNEL_STORAGE_KEY) === 'side' ? 'side' : 'main';
     let pendingNewThread = null;
     let knownThreads = [];
     let pollTimer = null;
@@ -2671,6 +2742,9 @@
     let pendingAttachments = [];
     let queuedSends = [];
     let historyRequestId = 0;
+    let sideStateRequestId = 0;
+    let sideStateBusy = false;
+    let sideRefreshTimer = 0;
     let syncRequestId = 0;
     let syncedThreadId = '';
     let autoRefreshTimer = null;
@@ -6374,6 +6448,7 @@
 
     async function loadThreadHistory(threadId = selectedThreadId) {
       if (!threadId) return;
+      if (chatChannel === 'side') return refreshSideChat({ force: true });
       const requestId = ++historyRequestId;
       clearThreadMessages();
       const loading = messageEl('assistant', '正在加载这个 Codex 线程的本机聊天记录…', { label: 'Codex mini' });
@@ -6414,25 +6489,136 @@
       }
     }
 
+    function renderChatChannel() {
+      const side = chatChannel === 'side';
+      document.body.classList.toggle('side-channel', side);
+      channelMainButton.classList.toggle('is-active', !side);
+      channelSideButton.classList.toggle('is-active', side);
+      channelMainButton.setAttribute('aria-selected', side ? 'false' : 'true');
+      channelSideButton.setAttribute('aria-selected', side ? 'true' : 'false');
+      sideRefreshButton.disabled = sideStateBusy;
+      attachButton.disabled = side;
+      attachButton.setAttribute('aria-disabled', side ? 'true' : 'false');
+      textarea.placeholder = side ? '发到 Codex 侧聊' : '发消息给 Codex Mini';
+      updateComposerAction();
+    }
+
+    function clearSideRefreshTimer() {
+      if (sideRefreshTimer) window.clearTimeout(sideRefreshTimer);
+      sideRefreshTimer = 0;
+    }
+
+    function scheduleSideRefresh(data = {}) {
+      clearSideRefreshTimer();
+      if (chatChannel !== 'side' || document.hidden) return;
+      const delayMs = data.sideRunning ? 3000 : data.available ? 12000 : 0;
+      if (!delayMs) return;
+      sideRefreshTimer = window.setTimeout(() => {
+        if (chatChannel === 'side') refreshSideChat({ quiet: true }).catch(() => {});
+      }, delayMs);
+    }
+
+    function renderSideState(data = {}, options = {}) {
+      clearThreadMessages();
+      const messages = Array.isArray(data.messages) ? data.messages : [];
+      if (!data.sideOpen) {
+        messageEl('assistant', '当前 Codex 窗口没有打开侧聊面板。直接发送会打开侧聊。', { label: 'Codex 侧聊' });
+        return;
+      }
+      if (!messages.length) {
+        messageEl('assistant', data.canSendDirect ? '侧聊面板已打开。' : '侧聊面板已打开，但暂时没有找到输入框。', { label: 'Codex 侧聊' });
+        return;
+      }
+      beginHistoryRenderAtBottom();
+      try {
+        for (const row of messages) {
+          messageEl(row.role === 'user' ? 'user' : 'assistant', row.text || '', {
+            label: row.role === 'user' ? '你 · 侧聊' : 'Codex 侧聊',
+            skipScroll: true,
+          });
+        }
+      } finally {
+        finishHistoryRenderAtBottom();
+      }
+      if (!options.quiet) setNotice(data.canSendDirect ? '已刷新侧聊' : '已读取侧聊，输入框状态未知', 'ok');
+    }
+
+    async function refreshSideChat(options = {}) {
+      const requestId = ++sideStateRequestId;
+      sideStateBusy = true;
+      renderChatChannel();
+      if (!options.quiet) {
+        clearThreadMessages();
+        messageEl('assistant', '正在读取 Codex 侧聊…', { label: 'Codex mini' });
+      }
+      try {
+        if (selectedThreadId && !options.skipSync) await syncCodexThread(selectedThreadId, { force: Boolean(options.force), quiet: true }).catch(() => null);
+        const params = new URLSearchParams({ token });
+        if (selectedThreadId) params.set('thread', selectedThreadId);
+        const response = await fetchApi(`/codex/side-state?${params}`, { cache: 'no-store', apiTimeoutMs: 16000 });
+        const data = await response.json().catch(() => ({}));
+        if (requestId !== sideStateRequestId || chatChannel !== 'side') return;
+        if (!response.ok || !data.ok) throw new Error(data.message || '读取侧聊失败');
+        renderSideState(data, options);
+        scheduleSideRefresh(data);
+      } catch (error) {
+        if (requestId !== sideStateRequestId || chatChannel !== 'side') return;
+        clearThreadMessages();
+        messageEl('assistant', error.message || '读取侧聊失败', { label: 'Codex mini' });
+        setNotice(error.message || '读取侧聊失败', 'error');
+      } finally {
+        if (requestId === sideStateRequestId) {
+          sideStateBusy = false;
+          renderChatChannel();
+        }
+      }
+    }
+
+    async function setChatChannel(channel, options = {}) {
+      const next = channel === 'side' ? 'side' : 'main';
+      if (next === chatChannel && !options.force) {
+        if (next === 'side') await refreshSideChat({ force: true });
+        return;
+      }
+      if (chatChannel === 'main') serializeMessages();
+      chatChannel = next;
+      localStorage.setItem(CHAT_CHANNEL_STORAGE_KEY, chatChannel);
+      clearSideRefreshTimer();
+      renderChatChannel();
+      clearThreadMessages();
+      if (chatChannel === 'side') {
+        await refreshSideChat({ force: true });
+      } else if (selectedThreadId) {
+        await loadThreadHistory(selectedThreadId);
+      } else {
+        restoreMessages();
+      }
+    }
+
     async function selectThread(threadId) {
       if (!threadId) return;
       threadMenu.classList.remove('is-open');
       setThreadCompleteNotice(threadId, false);
       if (threadId === selectedThreadId) {
         const desktopSync = syncCodexThread(threadId, { force: true }).catch(() => null);
-        if (activeAssistant || pollTimer) {
+        if (chatChannel !== 'side' && (activeAssistant || pollTimer)) {
           await desktopSync;
           return;
         }
-        setNotice('正在刷新这个线程的本机聊天记录…', 'ok');
-        await loadThreadHistory(threadId);
         await desktopSync;
+        if (chatChannel === 'side') {
+          setNotice('正在刷新这个线程的侧聊…', 'ok');
+          await refreshSideChat({ force: true, skipSync: true });
+        } else {
+          setNotice('正在刷新这个线程的本机聊天记录…', 'ok');
+          await loadThreadHistory(threadId);
+        }
         refreshGuiState({ force: true });
         pollApprovalPrompt({ force: true });
         return;
       }
 
-      serializeMessages();
+      if (chatChannel === 'main') serializeMessages();
       stopPolling();
       hideApprovalPrompt('thread-change');
       selectedThreadId = threadId;
@@ -6447,11 +6633,12 @@
       clearThreadMessages();
       updateThreadTitle();
       renderThreadMenu();
-      setNotice('已切换到线程，正在同步桌面端并加载本机聊天记录…', 'ok');
+      setNotice(chatChannel === 'side' ? '已切换到线程，正在同步桌面端并读取侧聊…' : '已切换到线程，正在同步桌面端并加载本机聊天记录…', 'ok');
 
       const desktopSync = syncCodexThread(threadId, { force: true }).catch(() => null);
-      await loadThreadHistory(threadId);
       await desktopSync;
+      if (chatChannel === 'side') await refreshSideChat({ force: true, skipSync: true });
+      else await loadThreadHistory(threadId);
       refreshGuiState({ force: true });
       pollApprovalPrompt({ force: true });
     }
@@ -6471,6 +6658,7 @@
     }
 
     function serializeMessages() {
+      if (chatChannel === 'side') return;
       const rows = [...thread.querySelectorAll('.message')].slice(-30).map(article => ({
         role: article.classList.contains('user') ? 'user' : 'assistant',
         label: article.querySelector('.meta')?.textContent?.replace(/ · 正在回复$/, '') || '',
@@ -7272,16 +7460,80 @@
     }
 
     function updateComposerAction() {
-      const running = Boolean(activeAssistant || pollTimer);
+      const running = chatChannel === 'side' ? false : Boolean(activeAssistant || pollTimer);
       sendButton.hidden = running;
       sendButton.classList.toggle('composer-action-hidden', running);
       stopButton.hidden = !running;
       stopButton.classList.toggle('composer-action-hidden', !running);
       composer.classList.toggle('is-running', running);
+      composer.classList.toggle('is-side-channel', chatChannel === 'side');
       updateTitleDotState();
     }
 
+    async function sendSideText(options = {}) {
+      const hasTextOverride = typeof options.text === 'string';
+      const text = hasTextOverride ? options.text : textarea.value;
+      const attachmentsToSend = hasTextOverride ? [] : [...pendingAttachments];
+      if (!text.trim()) return;
+      if (attachmentsToSend.length) {
+        setNotice('侧聊暂时只支持文字，先移除附件', 'error');
+        return;
+      }
+
+      sendButton.disabled = true;
+      setWorkingDot(true);
+      setNotice(options.sendingNotice || '正在发送到 Codex 侧聊…', 'ok');
+      try {
+        await ensureRouteForSend();
+      } catch (error) {
+        setNotice(error.message || '发送前网络检查失败，已取消发送', 'error');
+        sendButton.disabled = false;
+        setWorkingDot(false);
+        if (hasTextOverride) restoreLayoutAfterKeyboard();
+        else textarea.focus({ preventScroll: true });
+        return;
+      }
+
+      messageEl('user', text, { label: options.userLabel || '你 · 侧聊' });
+      const pending = messageEl('assistant', '已发送，等待侧聊响应…', { label: 'Codex 侧聊', pending: true });
+      if (!hasTextOverride) {
+        textarea.value = '';
+        pendingAttachments = [];
+        renderAttachmentTray();
+        autosize();
+      }
+
+      try {
+        const response = await fetchApi('/codex/side-send', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-mobile-typer-token': token },
+          body: JSON.stringify({ text, threadId: selectedThreadId }),
+          apiTimeoutMs: 60000,
+          routeSwitchQuiet: true,
+          retryProbeTimeoutMs: 900,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) throw new Error(data.message || '发送侧聊失败');
+        pending.article.classList.remove('pending');
+        setMarkdown(pending.bubble, data.fallback ? '已用侧聊指令发送。' : '已发送到侧聊。');
+        setNotice(options.sentNotice || '已发送到侧聊', 'ok');
+        window.setTimeout(() => {
+          if (chatChannel === 'side') refreshSideChat({ quiet: true, skipSync: true }).catch(() => {});
+        }, 1200);
+      } catch (error) {
+        pending.article.classList.remove('pending');
+        setMarkdown(pending.bubble, error.message || '发送侧聊失败');
+        setNotice(error.message || '发送侧聊失败', 'error');
+      } finally {
+        sendButton.disabled = false;
+        setWorkingDot(false);
+        if (hasTextOverride) restoreLayoutAfterKeyboard();
+        else textarea.focus({ preventScroll: true });
+      }
+    }
+
     async function sendText(options = {}) {
+      if (chatChannel === 'side') return sendSideText(options);
       const hasTextOverride = typeof options.text === 'string';
       const isPendingNewThreadFirstSend = Boolean(pendingNewThread && !selectedThreadId);
       const queueBehindActiveRun = Boolean((activeAssistant || pollTimer) && !isPendingNewThreadFirstSend);
@@ -7485,6 +7737,18 @@
       window.visualViewport.addEventListener('resize', positionPermissionMenu);
       window.visualViewport.addEventListener('scroll', positionPermissionMenu);
     }
+    channelMainButton.addEventListener('click', event => {
+      event.preventDefault();
+      setChatChannel('main').catch(error => setNotice(error.message || '切换主线失败', 'error'));
+    });
+    channelSideButton.addEventListener('click', event => {
+      event.preventDefault();
+      setChatChannel('side').catch(error => setNotice(error.message || '切换侧聊失败', 'error'));
+    });
+    sideRefreshButton.addEventListener('click', event => {
+      event.preventDefault();
+      if (chatChannel === 'side') refreshSideChat({ force: true }).catch(error => setNotice(error.message || '刷新侧聊失败', 'error'));
+    });
     newThreadButton.addEventListener('click', createNewThreadInCurrentProject);
     settingsButton.addEventListener('click', event => {
       event.preventDefault();
@@ -8025,6 +8289,7 @@
     lockPageScrollToThread();
     installTopActionsScrollGuard();
     applyAppearanceSettings();
+    renderChatChannel();
     positionComposerSignature();
     updateRouteBadge();
     alignTopActionsRight();
@@ -8038,7 +8303,8 @@
       .then(() => loadThreads())
       .then(async () => {
         await refreshKeepAwakeStatus();
-        await loadThreadHistory(selectedThreadId);
+        if (chatChannel === 'side') await refreshSideChat({ force: true });
+        else await loadThreadHistory(selectedThreadId);
         startAutoRefresh();
         startGuiStateWatcher();
         startApprovalPromptWatcher();

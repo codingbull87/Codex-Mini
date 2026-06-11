@@ -6028,6 +6028,313 @@ async function cdpSendTextToCodex(text, threadId = '', options = {}) {
   });
 }
 
+function cdpSideChatDomHelpersSource() {
+  return `
+    const visible = ${cdpVisibleHelperSource()};
+    const normalize = text => String(text || '').replace(/\\s+/g, ' ').trim();
+    const attrText = el => [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('placeholder'), el.getAttribute('data-testid'), el.getAttribute('data-state'), el.id, el.className].join(' ');
+    const sidePattern = /(?:\\bside\\b|side\\s*chat|side\\s*conversation|\\/side|侧边聊天|侧聊|侧边对话|旁路聊天|边聊)/i;
+    const mainComposerPattern = /发消息给\\s*Codex\\s*Mini|发送给\\s*Codex\\s*Mini|Codex Mini By Coming Rain/i;
+    const controlSelector = 'button,[role="button"],[role="menuitem"],[role="option"],textarea,input,[contenteditable="true"],.ProseMirror,select';
+    const editorSelector = '.ProseMirror,[contenteditable="true"],textarea,input[role="textbox"],input[type="text"],input:not([type])';
+    const rectOf = el => {
+      const rect = el.getBoundingClientRect();
+      return { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) };
+    };
+    const isEditor = el => Boolean(el && visible(el) && (
+      el.matches('textarea,input[role="textbox"],input[type="text"],input:not([type]),.ProseMirror') ||
+      el.getAttribute('contenteditable') === 'true' ||
+      el.isContentEditable
+    ));
+    const editorText = el => normalize(el.value || el.innerText || el.textContent || '');
+    const editorHintText = el => normalize([attrText(el), attrText(el.closest('form') || el.parentElement || el)].join(' '));
+    const isMainComposerEditor = el => {
+      const root = el.closest('form') || el.closest('[data-testid]') || el.parentElement || el;
+      const text = normalize([editorHintText(el), root?.innerText || '', root?.textContent || ''].join(' '));
+      const rect = el.getBoundingClientRect();
+      const bottomWideComposer = rect.y > Math.max(420, window.innerHeight - 190) && rect.width > Math.min(520, window.innerWidth * 0.35);
+      return mainComposerPattern.test(text) || bottomWideComposer || (rect.y > window.innerHeight * 0.58 && rect.x < window.innerWidth * 0.70 && rect.width > Math.min(520, window.innerWidth * 0.35));
+    };
+    const candidateRoots = () => {
+      const sideSelectors = [
+        '[data-codex-side-chat]',
+        '[data-testid*="side" i]',
+        '[aria-label*="side" i]',
+        '[title*="side" i]',
+        '[id*="side" i]',
+        '[class*="side" i]',
+        '[aria-label*="侧" i]',
+        '[title*="侧" i]',
+        '[id*="侧" i]',
+        '[class*="侧" i]',
+        '[role="dialog"]',
+        '[role="complementary"]',
+        'aside'
+      ].join(',');
+      const base = [...document.querySelectorAll(sideSelectors)].filter(visible);
+      const editorAncestors = [];
+      for (const editor of [...document.querySelectorAll(editorSelector)].filter(isEditor)) {
+        let node = editor.parentElement;
+        for (let depth = 0; node && depth < 7; depth += 1, node = node.parentElement) {
+          if (!visible(node)) continue;
+          const rect = node.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0 && (rect.left >= window.innerWidth * 0.46 || rect.width <= Math.min(760, window.innerWidth * 0.52))) {
+            editorAncestors.push(node);
+          }
+        }
+      }
+      const all = [...new Set([...base, ...editorAncestors])].filter(visible);
+      const scored = [];
+      for (const el of all) {
+        if (el === document.body || el === document.documentElement) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 220 || rect.height < 120) continue;
+        if (rect.width > window.innerWidth * 0.92 && rect.height > window.innerHeight * 0.85) continue;
+        const rawAttr = attrText(el);
+        const ownText = normalize([rawAttr, el.innerText || '', el.textContent || ''].join(' '));
+        const editors = [...el.querySelectorAll(editorSelector)].filter(isEditor);
+        const rightPanel = rect.left >= window.innerWidth * 0.36 || rect.right > window.innerWidth * 0.82;
+        const sideAttrWords = sidePattern.test(rawAttr);
+        const sideWords = sideAttrWords || sidePattern.test(ownText);
+        const hasSideEditor = editors.some(item => !isMainComposerEditor(item));
+        const narrowRightEditablePanel = hasSideEditor && (rect.left >= window.innerWidth * 0.52 || rect.width <= window.innerWidth * 0.48);
+        const compactPanel = rect.width <= Math.min(760, window.innerWidth * 0.52) || rect.left >= window.innerWidth * 0.56;
+        const labeledSidePanel = sideAttrWords || (sideWords && compactPanel && (el.matches('[role="dialog"],[role="complementary"],aside') || rect.width <= window.innerWidth * 0.55 || rect.left >= window.innerWidth * 0.56));
+        const hasUsefulText = ownText.length >= 18;
+        if (rect.width > 900) continue;
+        if (!sideAttrWords && rect.width > Math.min(900, window.innerWidth * 0.62)) continue;
+        if (!labeledSidePanel && !narrowRightEditablePanel) continue;
+        let score = 0;
+        if (labeledSidePanel) score += 90;
+        else if (sideWords) score += 24;
+        if (rightPanel) score += 22;
+        if (narrowRightEditablePanel) score += 62;
+        if (hasSideEditor) score += 36;
+        if (el.matches('[role="dialog"],[role="complementary"],aside')) score += 28;
+        if (hasUsefulText) score += Math.min(24, Math.floor(ownText.length / 90));
+        if (el.querySelector('[data-app-action-sidebar-thread-id],[data-app-action-sidebar-project-row]')) score -= 70;
+        if (mainComposerPattern.test(ownText)) score -= 70;
+        if (rect.left < 260 && rect.width < window.innerWidth * 0.55) score -= 20;
+        scored.push({ el, score, sideWords, rightPanel, editorCount: editors.length, rect: rectOf(el), text: ownText.slice(0, 260) });
+      }
+      return scored.sort((a, b) => b.score - a.score || a.rect.w * a.rect.h - b.rect.w * b.rect.h);
+    };
+    const findSideRoot = () => {
+      const roots = candidateRoots();
+      return roots.find(item => item.score >= 55)?.el || null;
+    };
+    const findSideEditor = root => {
+      if (!root) return null;
+      const editors = [...document.querySelectorAll(editorSelector)].filter(isEditor);
+      const scored = [];
+      for (const editor of editors) {
+        const rect = editor.getBoundingClientRect();
+        const inRoot = Boolean(root && root.contains(editor));
+        let score = 0;
+        if (inRoot) score += 120;
+        if (rect.left >= window.innerWidth * 0.36 || rect.right > window.innerWidth * 0.82) score += 40;
+        if (sidePattern.test(editorHintText(editor))) score += 40;
+        if (!isMainComposerEditor(editor)) score += 25;
+        else score -= 80;
+        if (rect.y > window.innerHeight * 0.42) score += 12;
+        scored.push({ editor, score, rect: rectOf(editor), hint: editorHintText(editor).slice(0, 160), text: editorText(editor).slice(0, 160) });
+      }
+      scored.sort((a, b) => b.score - a.score || b.rect.y - a.rect.y);
+      return scored[0]?.score >= 50 ? scored[0].editor : null;
+    };
+    const nearestMessageRole = el => {
+      const carrier = el.closest('[data-message-author-role],[data-role],[aria-label],article,[role="article"]');
+      const raw = normalize([
+        carrier?.getAttribute('data-message-author-role'),
+        carrier?.getAttribute('data-role'),
+        carrier?.getAttribute('aria-label'),
+        carrier?.className,
+        el.className
+      ].join(' ')).toLowerCase();
+      if (/user|human|you|你/.test(raw)) return 'user';
+      if (/assistant|codex|agent|bot|ai|助理/.test(raw)) return 'assistant';
+      const rect = el.getBoundingClientRect();
+      return rect.left > window.innerWidth * 0.58 ? 'user' : 'assistant';
+    };
+    const readSideMessages = root => {
+      if (!root) return [];
+      const blocks = [...root.querySelectorAll('[data-message-author-role],[data-role],article,[role="article"],.prose,p,li,pre,blockquote,div')]
+        .filter(visible)
+        .map(el => ({ el, text: normalize(el.innerText || el.textContent || '') }))
+        .filter(item => {
+          if (!item.text || item.text.length < 2) return false;
+          if (item.text.length > 6000) return false;
+          if (item.el.closest(controlSelector)) return false;
+          const rect = item.el.getBoundingClientRect();
+          if (rect.height < 8 || rect.width < 40) return false;
+          if (/^(发送|停止|取消|主线|侧聊|侧边聊天|Side|Main|New chat|新对话)$/.test(item.text)) return false;
+          return true;
+        });
+      const deduped = [];
+      const seen = new Set();
+      for (const item of blocks) {
+        const compact = item.text.slice(0, 500).toLowerCase();
+        if (seen.has(compact)) continue;
+        if (deduped.some(prev => prev.text.includes(item.text) && prev.text.length > item.text.length + 12)) continue;
+        seen.add(compact);
+        deduped.push({
+          role: nearestMessageRole(item.el),
+          text: item.text.slice(0, 2400),
+          rect: rectOf(item.el),
+        });
+      }
+      return deduped.slice(-40);
+    };
+    const sideSnapshot = () => {
+      const rootScores = candidateRoots().slice(0, 8);
+      const rootCandidate = rootScores.find(item => item.score >= 55 && item.rect.w <= 900) || null;
+      const root = rootCandidate ? rootCandidate.el : null;
+      const editor = findSideEditor(root);
+      const rootRect = root ? rectOf(root) : null;
+      const editorRect = editor ? rectOf(editor) : null;
+      const rootText = root ? normalize(root.innerText || root.textContent || '') : '';
+      const sideOpen = Boolean(root);
+      const sideRunning = sideOpen && /(?:停止|stop|running|生成中|正在)/i.test(rootText);
+      return {
+        ok: true,
+        available: sideOpen,
+        sideOpen,
+        sideRunning,
+        canSendDirect: Boolean(editor),
+        messages: readSideMessages(root),
+        detail: {
+          rootRect,
+          editorRect,
+          rootText: rootText.slice(0, 360),
+          candidates: rootScores.map(item => ({ score: item.score, sideWords: item.sideWords, rightPanel: item.rightPanel, editorCount: item.editorCount, rect: item.rect, text: item.text })),
+          editorHint: editor ? editorHintText(editor).slice(0, 220) : '',
+          editorText: editor ? editorText(editor).slice(0, 220) : '',
+        },
+      };
+    };
+  `;
+}
+
+async function cdpReadCodexSideState(threadId = '') {
+  return withCodexCdp(async client => {
+    let selected = { ok: true, skipped: true };
+    if (threadId) selected = await cdpClickThread(client, threadId, { settleMs: 180 });
+    const state = await cdpEvaluate(client, `(() => {
+      ${cdpSideChatDomHelpersSource()}
+      return sideSnapshot();
+    })()`);
+    return { ...state, selected, threadId };
+  });
+}
+
+async function cdpSendCodexSideChat(text, threadId = '') {
+  return withCodexCdp(async client => {
+    let selected = { ok: true, skipped: true };
+    if (threadId) selected = await cdpClickThread(client, threadId, { settleMs: 180 });
+    const result = await cdpEvaluate(client, `(async () => {
+      const textValue = ${jsLiteral(String(text || '').slice(0, MAX_TEXT_LENGTH))};
+      ${cdpSideChatDomHelpersSource()}
+      const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+      const root = findSideRoot();
+      const editor = findSideEditor(root);
+      const rootRect = root ? root.getBoundingClientRect() : null;
+      if (rootRect && rootRect.width > 900) {
+        return { ok: false, code: 'SIDE_COMPOSER_MISSING', reason: '识别到的是主聊天区，不是侧聊面板', state: sideSnapshot() };
+      }
+      if (!root || !editor) {
+        return { ok: false, code: 'SIDE_COMPOSER_MISSING', reason: root ? '找不到侧聊输入框' : '侧聊面板未打开', state: sideSnapshot() };
+      }
+      const setEditorText = el => {
+        el.focus();
+        if (el.matches('textarea,input')) {
+          el.value = '';
+          el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward', data: null }));
+          el.value = textValue;
+          el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: textValue }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          return;
+        }
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        document.execCommand('delete', false, null);
+        if (!document.execCommand('insertText', false, textValue)) {
+          el.textContent = textValue;
+        }
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: textValue }));
+      };
+      setEditorText(editor);
+      await sleep(90);
+      const rootForButtons = root || editor.closest('form') || editor.parentElement;
+      const editorRect = editor.getBoundingClientRect();
+      const buttons = [...rootForButtons.querySelectorAll('button,[role="button"]')]
+        .filter(button => visible(button) && !button.disabled && button.getAttribute('aria-disabled') !== 'true')
+        .map(button => {
+          const rect = button.getBoundingClientRect();
+          const label = normalize([button.innerText, attrText(button)].join(' '));
+          let score = 0;
+          if (/发送|提交|send|submit|arrow|↑/i.test(label)) score += 80;
+          if (rect.y >= editorRect.top - 18 && rect.y <= editorRect.bottom + 70) score += 35;
+          if (rect.x >= editorRect.right - 90) score += 22;
+          if (rect.width <= 64 && rect.height <= 64) score += 15;
+          if (/停止|取消|stop|cancel|设置|model|reasoning/i.test(label)) score -= 90;
+          return { button, score, label, rect: rectOf(button) };
+        })
+        .sort((a, b) => b.score - a.score || b.rect.x - a.rect.x);
+      const button = buttons[0]?.score >= 35 ? buttons[0] : null;
+      if (button) {
+        button.button.click();
+        return { ok: true, method: 'side-direct-click', clicked: { label: button.label, rect: button.rect }, state: sideSnapshot() };
+      }
+      editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+      editor.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+      return { ok: true, method: 'side-direct-enter', needNativeEnter: true, state: sideSnapshot() };
+    })()`);
+    if (!result || !result.ok) {
+      const error = new Error(result?.reason || '侧聊输入框不可用');
+      error.status = 404;
+      error.code = result?.code || 'SIDE_CHAT_UNAVAILABLE';
+      error.details = result || null;
+      throw error;
+    }
+    if (result.needNativeEnter) {
+      await cdpSubmitComposerByEnter(client);
+      result.nativeEnter = true;
+    } else {
+      await delay(CODEX_COMMAND_SETTLE_MS);
+    }
+    return { ...result, selected, threadId };
+  });
+}
+
+async function sendCodexSideChat(text, threadId = '') {
+  try {
+    const direct = await cdpSendCodexSideChat(text, threadId);
+    return {
+      ok: true,
+      method: direct.method || 'side-direct',
+      direct: true,
+      fallback: false,
+      result: direct,
+      message: '已发送到 Codex 侧聊。',
+    };
+  } catch (directError) {
+    const fallbackText = `/side ${String(text || '').trim()}`;
+    const fallback = await pasteAndEnter(fallbackText, 'codex', [], threadId, { assumeThreadSynced: false });
+    return {
+      ok: true,
+      method: 'side-slash-fallback',
+      direct: false,
+      fallback: true,
+      directError: directError?.message || String(directError || ''),
+      result: fallback,
+      message: '已用 /side 指令打开并发送到 Codex 侧聊。',
+    };
+  }
+}
+
 async function cdpActivateNewThread(target = {}) {
   return withCodexCdp(async client => {
     let selected = { ok: true, skipped: true };
@@ -6968,6 +7275,72 @@ async function handleApprovalPromptAction(req, res) {
   }
 }
 
+async function handleCodexSideState(req, res) {
+  if (!isAuthorized(req)) {
+    return json(res, 401, { ok: false, code: 'UNAUTHORIZED', message: '访问令牌不正确。' });
+  }
+
+  try {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const threadId = url.searchParams.get('thread') || '';
+    if (threadId && !isCodexThreadId(threadId)) {
+      return json(res, 400, { ok: false, code: 'BAD_THREAD_ID', message: '线程 ID 不正确。' });
+    }
+    const state = await cdpReadCodexSideState(threadId);
+    return json(res, 200, {
+      ...state,
+      ok: true,
+      message: state.sideOpen ? '已读取 Codex 侧聊。' : '当前 Codex 窗口没有打开侧聊面板。',
+    });
+  } catch (error) {
+    const explained = explainTargetError(error, 'codex');
+    return json(res, 500, { ok: false, ...explained, message: error.message || '读取 Codex 侧聊失败。' });
+  }
+}
+
+async function handleCodexSideSend(req, res) {
+  if (!isAuthorized(req)) {
+    return json(res, 401, { ok: false, code: 'UNAUTHORIZED', message: '访问令牌不正确。' });
+  }
+
+  let payload = {};
+  try {
+    payload = JSON.parse(await readBody(req) || '{}');
+  } catch (error) {
+    return json(res, error.status || 400, { ok: false, code: 'BAD_REQUEST', message: error.message || '请求格式不正确。' });
+  }
+
+  const text = typeof payload.text === 'string' ? payload.text : '';
+  const threadId = typeof payload.threadId === 'string' ? payload.threadId : '';
+  if (threadId && !isCodexThreadId(threadId)) {
+    return json(res, 400, { ok: false, code: 'BAD_THREAD_ID', message: '线程 ID 不正确。' });
+  }
+  if (!text.trim()) {
+    return json(res, 400, { ok: false, code: 'EMPTY_MESSAGE', message: '请输入侧聊内容。' });
+  }
+  if (text.length > MAX_TEXT_LENGTH) {
+    return json(res, 413, { ok: false, code: 'TEXT_TOO_LONG', message: `文字太长了，请控制在 ${MAX_TEXT_LENGTH} 字以内。` });
+  }
+  if (Array.isArray(payload.attachments) && payload.attachments.length) {
+    return json(res, 400, { ok: false, code: 'SIDE_ATTACHMENTS_UNSUPPORTED', message: '侧聊暂时只支持文字。' });
+  }
+
+  try {
+    const result = await sendCodexSideChat(text, threadId);
+    return json(res, 200, {
+      ...result,
+      threadId,
+      sentAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    if (error && error.status) {
+      return json(res, error.status, { ok: false, code: error.code || 'SIDE_SEND_FAILED', message: error.message || '发送侧聊失败。' });
+    }
+    const explained = explainTargetError(error, 'codex');
+    return json(res, 500, { ok: false, ...explained, message: error.message || '发送 Codex 侧聊失败。' });
+  }
+}
+
 async function handleSend(req, res) {
   if (!isAuthorized(req)) {
     return json(res, 401, { ok: false, code: 'UNAUTHORIZED', message: '访问令牌不正确。请使用启动服务时打印出来的完整手机链接。' });
@@ -7349,6 +7722,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url.startsWith('/codex/project-order')) return handleCodexProjectOrder(req, res);
   if (req.method === 'GET' && req.url.startsWith('/codex/gui-status')) return handleCodexGuiStatus(req, res);
   if (req.method === 'GET' && req.url.startsWith('/codex/approval-prompt')) return handleApprovalPrompt(req, res);
+  if (req.method === 'GET' && req.url.startsWith('/codex/side-state')) return handleCodexSideState(req, res);
   if (req.method === 'GET' && req.url.startsWith('/codex/status')) return handleCodexStatus(req, res);
   if (req.method === 'GET' && req.url.startsWith('/codex/keep-awake-toggle')) return handleKeepAwakeToggle(req, res);
   if ((req.method === 'GET' || req.method === 'POST') && req.url.startsWith('/codex/keep-awake')) return handleKeepAwake(req, res);
@@ -7359,6 +7733,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url.startsWith('/codex/reasoning-mode')) return handleReasoningMode(req, res);
   if (req.method === 'POST' && req.url.startsWith('/codex/approval-mode')) return handleApprovalMode(req, res);
   if (req.method === 'POST' && req.url.startsWith('/codex/approval-prompt-action')) return handleApprovalPromptAction(req, res);
+  if (req.method === 'POST' && req.url.startsWith('/codex/side-send')) return handleCodexSideSend(req, res);
   if (req.method === 'POST' && req.url.startsWith('/codex/stop')) return handleStopCodex(req, res);
   if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(req, res);
   json(res, 405, { ok: false, code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' });
