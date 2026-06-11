@@ -1623,7 +1623,8 @@
       visibility: hidden;
     }
     .chat-channel-switch {
-      position: relative;
+      position: sticky;
+      top: 0;
       z-index: 6;
       width: fit-content;
       max-width: 100%;
@@ -6557,7 +6558,8 @@
     }
 
     function sideTabKey(tab = {}) {
-      return String(tab.key || tab.id || tab.title || tab.index || '').trim();
+      if (Number.isFinite(Number(tab.index))) return `index:${Number(tab.index)}`;
+      return String(tab.key || tab.id || tab.title || '').trim();
     }
 
     function renderSideTabs(data = {}) {
@@ -6571,8 +6573,8 @@
         return;
       }
 
-      const selected = tabs.find(item => item.selected)
-        || tabs.find(item => sideTabKey(item) === selectedSideTabKey)
+      const selected = tabs.find(item => sideTabKey(item) === selectedSideTabKey)
+        || tabs.find(item => item.selected)
         || tabs[0];
       selectedSideTabKey = sideTabKey(selected);
       if (selectedSideTabKey) localStorage.setItem(SIDE_TAB_STORAGE_KEY, selectedSideTabKey);

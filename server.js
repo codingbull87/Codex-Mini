@@ -6139,10 +6139,12 @@ function cdpSideChatDomHelpersSource() {
         .filter(visible)
         .map((tab, index) => {
           const title = normalize(tab.innerText || tab.textContent).slice(0, 160) || ('侧聊 ' + (index + 1));
-          const key = sideTabKeyFor(tab, index);
+          const domKey = sideTabKeyFor(tab, index);
+          const key = 'index:' + index;
           return {
             id: key,
             key,
+            domKey,
             index,
             title,
             selected: tab.getAttribute('aria-selected') === 'true',
