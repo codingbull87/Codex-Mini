@@ -6573,8 +6573,8 @@
         return;
       }
 
-      const selected = tabs.find(item => sideTabKey(item) === selectedSideTabKey)
-        || tabs.find(item => item.selected)
+      const selected = tabs.find(item => item.selected)
+        || tabs.find(item => sideTabKey(item) === selectedSideTabKey)
         || tabs[0];
       selectedSideTabKey = sideTabKey(selected);
       if (selectedSideTabKey) localStorage.setItem(SIDE_TAB_STORAGE_KEY, selectedSideTabKey);

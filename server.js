@@ -6105,6 +6105,7 @@ function cdpSideChatDomHelpersSource() {
       .join('\\n')
       .replace(/\\n{3,}/g, '\\n\\n')
       .trim();
+    const domClick = ${cdpDomClickHelperSource()};
     const attrText = el => [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('placeholder'), el.getAttribute('data-testid'), el.getAttribute('data-state'), el.id, el.className].join(' ');
     const sidePattern = /(?:\\bside\\b|side\\s*chat|side\\s*conversation|\\/side|侧边聊天|侧聊|侧边对话|旁路聊天|边聊)/i;
     const mainComposerPattern = /发消息给\\s*Codex\\s*Mini|发送给\\s*Codex\\s*Mini|Codex Mini By Coming Rain/i;
@@ -6172,13 +6173,16 @@ function cdpSideChatDomHelpersSource() {
       if (!tab) return { ok: false, reason: '找不到这个侧聊标签', requestedKey: key, tabs: readSideTabs(root) };
       const index = tabs.indexOf(tab);
       const alreadySelected = tab.getAttribute('aria-selected') === 'true';
-      if (!alreadySelected) tab.click();
+      const clickable = tab.parentElement?.closest?.('[role="button"],button') || tab;
+      if (!alreadySelected) domClick(clickable);
       return {
         ok: true,
         skipped: alreadySelected,
         clicked: !alreadySelected,
         key: sideTabKeyFor(tab, index),
         index,
+        clickableTag: clickable.tagName || '',
+        clickableRole: clickable.getAttribute?.('role') || '',
         title: normalize(tab.innerText || tab.textContent).slice(0, 160),
       };
     };
@@ -6339,20 +6343,84 @@ function cdpSideChatDomHelpersSource() {
   `;
 }
 
+async function cdpClickCodexSideTab(client, sideTab = '') {
+  const requested = String(sideTab || '').slice(0, 240);
+  if (!requested) return { ok: true, skipped: true };
+  const target = await cdpEvaluate(client, `(() => {
+    const requestedSideTab = ${jsLiteral(requested)};
+    ${cdpSideChatDomHelpersSource()}
+    const key = normalize(requestedSideTab);
+    const root = findSideRoot();
+    if (!root || !key) return { ok: true, skipped: true, reason: root ? '' : '侧聊面板未打开' };
+    const tabs = [...root.querySelectorAll('[role="tab"]')].filter(visible);
+    const tab = tabs.find((item, index) => {
+      const title = normalize(item.innerText || item.textContent);
+      const values = [
+        'index:' + index,
+        sideTabKeyFor(item, index),
+        item.getAttribute('id') || '',
+        item.getAttribute('aria-controls') || '',
+        title,
+        String(index),
+      ].map(normalize);
+      return values.includes(key);
+    }) || null;
+    if (!tab) return { ok: false, reason: '找不到这个侧聊标签', requestedKey: key, tabs: readSideTabs(root) };
+    const index = tabs.indexOf(tab);
+    const alreadySelected = tab.getAttribute('aria-selected') === 'true';
+    const clickable = tab.parentElement?.closest?.('[role="button"],button') || tab;
+    const rect = clickable.getBoundingClientRect();
+    const tabRect = tab.getBoundingClientRect();
+    return {
+      ok: true,
+      skipped: alreadySelected,
+      clicked: false,
+      requestedKey: key,
+      key: 'index:' + index,
+      domKey: sideTabKeyFor(tab, index),
+      index,
+      title: normalize(tab.innerText || tab.textContent).slice(0, 160),
+      clickableTag: clickable.tagName || '',
+      clickableRole: clickable.getAttribute?.('role') || '',
+      point: {
+        x: Math.round(rect.left + Math.max(1, Math.min(rect.width - 1, rect.width / 2))),
+        y: Math.round(rect.top + Math.max(1, Math.min(rect.height - 1, rect.height / 2))),
+      },
+      rect: rectOf(clickable),
+      tabRect: rectOf(tab),
+    };
+  })()`);
+  if (!target || !target.ok || target.skipped || !target.point) return target || { ok: false, reason: '侧聊标签点击目标不可用' };
+  await client.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: target.point.x, y: target.point.y, button: 'none' });
+  await client.call('Input.dispatchMouseEvent', { type: 'mousePressed', x: target.point.x, y: target.point.y, button: 'left', clickCount: 1 });
+  await delay(80);
+  await client.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: target.point.x, y: target.point.y, button: 'left', clickCount: 1 });
+  await delay(420);
+  const verification = await cdpEvaluate(client, `(() => {
+    ${cdpSideChatDomHelpersSource()}
+    const tabs = readSideTabs(findSideRoot());
+    const selected = tabs.find(item => item.selected) || null;
+    return { tabs, selected };
+  })()`).catch(error => ({ error: String(error && error.message || error) }));
+  return {
+    ...target,
+    clicked: true,
+    nativeClick: true,
+    switched: verification?.selected?.key === target.key,
+    verification,
+  };
+}
+
 async function cdpReadCodexSideState(threadId = '', sideTab = '') {
   return withCodexCdp(async client => {
     let selected = { ok: true, skipped: true };
     if (threadId) selected = await cdpClickThread(client, threadId);
+    const selectedSideTab = await cdpClickCodexSideTab(client, sideTab);
     const state = await cdpEvaluate(client, `(async () => {
-      const requestedSideTab = ${jsLiteral(String(sideTab || '').slice(0, 240))};
       ${cdpSideChatDomHelpersSource()}
-      const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-      const root = findSideRoot();
-      const selectedSideTab = selectSideTab(root, requestedSideTab);
-      if (selectedSideTab.clicked) await sleep(180);
-      return { ...sideSnapshot(), selectedSideTab };
+      return sideSnapshot();
     })()`);
-    return { ...state, selected, threadId, sideTab };
+    return { ...state, selected, selectedSideTab, threadId, sideTab };
   });
 }
 
@@ -6360,17 +6428,15 @@ async function cdpSendCodexSideChat(text, threadId = '', sideTab = '') {
   return withCodexCdp(async client => {
     let selected = { ok: true, skipped: true };
     if (threadId) selected = await cdpClickThread(client, threadId);
+    const selectedSideTab = await cdpClickCodexSideTab(client, sideTab);
     const result = await cdpEvaluate(client, `(async () => {
       const textValue = ${jsLiteral(String(text || '').slice(0, MAX_TEXT_LENGTH))};
-      const requestedSideTab = ${jsLiteral(String(sideTab || '').slice(0, 240))};
       ${cdpSideChatDomHelpersSource()}
       const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
       const root = findSideRoot();
-      const selectedSideTab = selectSideTab(root, requestedSideTab);
-      if (selectedSideTab.clicked) await sleep(180);
       const editor = findSideEditor(root);
       if (!root || !editor) {
-        return { ok: false, code: 'SIDE_COMPOSER_MISSING', reason: root ? '找不到侧聊输入框' : '侧聊面板未打开', selectedSideTab, state: sideSnapshot() };
+        return { ok: false, code: 'SIDE_COMPOSER_MISSING', reason: root ? '找不到侧聊输入框' : '侧聊面板未打开', state: sideSnapshot() };
       }
       const setEditorText = el => {
         el.focus();
@@ -6414,11 +6480,11 @@ async function cdpSendCodexSideChat(text, threadId = '', sideTab = '') {
       const button = buttons[0]?.score >= 35 ? buttons[0] : null;
       if (button) {
         button.button.click();
-        return { ok: true, method: 'side-direct-click', selectedSideTab, clicked: { label: button.label, rect: button.rect }, state: sideSnapshot() };
+        return { ok: true, method: 'side-direct-click', clicked: { label: button.label, rect: button.rect }, state: sideSnapshot() };
       }
       editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
       editor.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-      return { ok: true, method: 'side-direct-enter', selectedSideTab, needNativeEnter: true, state: sideSnapshot() };
+      return { ok: true, method: 'side-direct-enter', needNativeEnter: true, state: sideSnapshot() };
     })()`);
     if (!result || !result.ok) {
       const error = new Error(result?.reason || '侧聊输入框不可用');
@@ -6433,7 +6499,7 @@ async function cdpSendCodexSideChat(text, threadId = '', sideTab = '') {
     } else {
       await delay(CODEX_COMMAND_SETTLE_MS);
     }
-    return { ...result, selected, threadId, sideTab };
+    return { ...result, selected, selectedSideTab, threadId, sideTab };
   });
 }
 
