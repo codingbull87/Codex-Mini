@@ -6552,9 +6552,11 @@
         messageEl('assistant', '正在读取 Codex 侧聊…', { label: 'Codex mini' });
       }
       try {
-        if (selectedThreadId && !options.skipSync) await syncCodexThread(selectedThreadId, { force: Boolean(options.force), quiet: true }).catch(() => null);
+        if (options.syncThread && selectedThreadId && !options.skipSync) {
+          await syncCodexThread(selectedThreadId, { force: Boolean(options.force), quiet: true }).catch(() => null);
+        }
         const params = new URLSearchParams({ token });
-        if (selectedThreadId) params.set('thread', selectedThreadId);
+        if (options.syncThread && selectedThreadId) params.set('thread', selectedThreadId);
         const response = await fetchApi(`/codex/side-state?${params}`, { cache: 'no-store', apiTimeoutMs: 16000 });
         const data = await response.json().catch(() => ({}));
         if (requestId !== sideStateRequestId || chatChannel !== 'side') return;
@@ -6584,6 +6586,7 @@
       chatChannel = next;
       localStorage.setItem(CHAT_CHANNEL_STORAGE_KEY, chatChannel);
       clearSideRefreshTimer();
+      if (chatChannel === 'side') detachForegroundRunForSideChannel();
       renderChatChannel();
       clearThreadMessages();
       if (chatChannel === 'side') {
@@ -6714,6 +6717,20 @@
       setTopStatus('已连接');
     }
 
+    function detachForegroundRunForSideChannel() {
+      pollGeneration += 1;
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = null;
+      stopRunDurationTimer();
+      activeWatch = null;
+      pollAttempts = 0;
+      activeAssistant = null;
+      lastPreview = '';
+      setWorkingDot(false);
+      updateComposerAction();
+      setTopStatus('已连接');
+    }
+
     function adoptNewThreadId(threadId) {
       if (!threadId || (selectedThreadId && selectedThreadId === threadId)) return;
       hideApprovalPrompt('thread-change');
@@ -6733,6 +6750,7 @@
 
     async function pollStatus(watch, generation = pollGeneration) {
       if (generation !== pollGeneration) return;
+      if (chatChannel === 'side') return stopPolling();
       if (!watch || !activeAssistant) return stopPolling();
       pollAttempts += 1;
       const params = new URLSearchParams({ token, since: watch.since || '', thread: watch.threadId || selectedThreadId || '' });
@@ -6806,6 +6824,7 @@
 
     function startPolling(watch) {
       stopPolling();
+      if (chatChannel === 'side') return;
       if (!activeAssistant) return;
       const generation = ++pollGeneration;
       activeWatch = watch || null;
@@ -6823,7 +6842,7 @@
     }
 
     async function refreshCurrentThreadIfChanged() {
-      if (!selectedThreadId || activeAssistant || autoRefreshBusy || document.hidden) return;
+      if (chatChannel === 'side' || !selectedThreadId || activeAssistant || autoRefreshBusy || document.hidden) return;
       autoRefreshBusy = true;
       let dotStarted = false;
       const threadId = selectedThreadId;
@@ -7507,7 +7526,7 @@
         const response = await fetchApi('/codex/side-send', {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-mobile-typer-token': token },
-          body: JSON.stringify({ text, threadId: selectedThreadId }),
+          body: JSON.stringify({ text }),
           apiTimeoutMs: 60000,
           routeSwitchQuiet: true,
           retryProbeTimeoutMs: 900,
