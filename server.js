@@ -72,7 +72,7 @@ const CODEX_COMMAND_SETTLE_MS = 180;
 const CODEX_CDP_HOST = process.env.CODEX_MINI_CDP_HOST || 'localhost';
 const CODEX_CDP_PORT = Number(process.env.CODEX_MINI_CDP_PORT || 39252);
 const CODEX_CDP_TIMEOUT_MS = Number(process.env.CODEX_MINI_CDP_TIMEOUT_MS || 5000);
-const CODEX_SIDE_DOM_ENABLED = process.env.CODEX_MINI_SIDE_DOM_ENABLED === '1';
+const CODEX_SIDE_DOM_ENABLED = process.env.CODEX_MINI_SIDE_DOM_ENABLED !== '0';
 const CONTROLLED_CODEX_ABNORMAL_CODE = 'CONTROLLED_CODEX_ABNORMAL';
 const CONTROLLED_CODEX_ABNORMAL_MESSAGE = '受控 Codex 异常，请在电脑界面打开受控 Codex';
 const NORMAL_CODEX_EXECUTABLE_PATH = '/Applications/Codex.app/Contents/MacOS/Codex';
@@ -6056,73 +6056,58 @@ function cdpSideChatDomHelpersSource() {
       const bottomWideComposer = rect.y > Math.max(420, window.innerHeight - 190) && rect.width > Math.min(520, window.innerWidth * 0.35);
       return mainComposerPattern.test(text) || bottomWideComposer || (rect.y > window.innerHeight * 0.58 && rect.x < window.innerWidth * 0.70 && rect.width > Math.min(520, window.innerWidth * 0.35));
     };
+    const readSideTabs = root => {
+      if (!root) return [];
+      return [...root.querySelectorAll('[role="tab"]')]
+        .filter(visible)
+        .map((tab, index) => ({
+          id: tab.getAttribute('id') || tab.getAttribute('aria-controls') || String(index),
+          index,
+          title: normalize(tab.innerText || tab.textContent).slice(0, 160) || ('侧聊 ' + (index + 1)),
+          selected: tab.getAttribute('aria-selected') === 'true',
+          rect: rectOf(tab),
+        }))
+        .filter(item => item.title);
+    };
+    const sideTextPreview = root => {
+      if (!root) return '';
+      const tabText = readSideTabs(root).map(item => item.title).join(' / ');
+      const messageText = readSideMessages(root).slice(-2).map(item => item.text).join(' ');
+      return normalize([tabText, messageText].filter(Boolean).join(' ')).slice(0, 360);
+    };
     const candidateRoots = () => {
-      const sideSelectors = [
-        '[data-codex-side-chat]',
-        '[data-testid*="side" i]',
-        '[aria-label*="side" i]',
-        '[title*="side" i]',
-        '[id*="side" i]',
-        '[class*="side" i]',
-        '[aria-label*="侧" i]',
-        '[title*="侧" i]',
-        '[id*="侧" i]',
-        '[class*="侧" i]',
-        '[role="dialog"]',
-        '[role="complementary"]',
-        'aside'
-      ].join(',');
-      const base = [...document.querySelectorAll(sideSelectors)].filter(visible);
-      const editorAncestors = [];
-      for (const editor of [...document.querySelectorAll(editorSelector)].filter(isEditor)) {
-        let node = editor.parentElement;
-        for (let depth = 0; node && depth < 7; depth += 1, node = node.parentElement) {
-          if (!visible(node)) continue;
-          const rect = node.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0 && (rect.left >= window.innerWidth * 0.46 || rect.width <= Math.min(760, window.innerWidth * 0.52))) {
-            editorAncestors.push(node);
-          }
-        }
-      }
-      const all = [...new Set([...base, ...editorAncestors])].filter(visible);
+      const roots = [...document.querySelectorAll('aside,[role="dialog"],[role="complementary"]')].filter(visible);
       const scored = [];
-      for (const el of all) {
+      for (const el of roots) {
         if (el === document.body || el === document.documentElement) continue;
         const rect = el.getBoundingClientRect();
-        if (rect.width < 220 || rect.height < 120) continue;
-        if (rect.width > window.innerWidth * 0.92 && rect.height > window.innerHeight * 0.85) continue;
-        if (rect.width > 900) continue;
-        const rawAttr = attrText(el);
-        const ownText = normalize([rawAttr, el.innerText || '', el.textContent || ''].join(' '));
+        if (rect.width < 240 || rect.height < 220) continue;
+        if (rect.left < Math.min(320, window.innerWidth * 0.25) && rect.width < window.innerWidth * 0.55) continue;
+        if (el.querySelector('[data-app-action-sidebar-thread-id],[data-app-action-sidebar-project-row]')) continue;
+        const tablist = el.querySelector('[role="tablist"]');
+        const panel = el.querySelector('[role="tabpanel"]');
         const editors = [...el.querySelectorAll(editorSelector)].filter(isEditor);
-        const rightPanel = rect.left >= window.innerWidth * 0.36 || rect.right > window.innerWidth * 0.82;
-        const sideAttrWords = sidePattern.test(rawAttr);
-        const sideWords = sideAttrWords || sidePattern.test(ownText);
         const hasSideEditor = editors.some(item => !isMainComposerEditor(item));
-        const narrowRightEditablePanel = hasSideEditor && (rect.left >= window.innerWidth * 0.52 || rect.width <= window.innerWidth * 0.48);
-        const compactPanel = rect.width <= Math.min(760, window.innerWidth * 0.52) || rect.left >= window.innerWidth * 0.56;
-        const labeledSidePanel = sideAttrWords || (sideWords && compactPanel && (el.matches('[role="dialog"],[role="complementary"],aside') || rect.width <= window.innerWidth * 0.55 || rect.left >= window.innerWidth * 0.56));
-        const hasUsefulText = ownText.length >= 18;
-        if (!sideAttrWords && rect.width > Math.min(900, window.innerWidth * 0.62)) continue;
-        if (!labeledSidePanel && !narrowRightEditablePanel) continue;
+        const rightPanel = rect.left >= window.innerWidth * 0.32 || rect.right > window.innerWidth * 0.82;
+        const sideChrome = Boolean(tablist || panel || hasSideEditor);
+        if (!sideChrome || !rightPanel) continue;
+        const tabs = readSideTabs(el);
         let score = 0;
-        if (labeledSidePanel) score += 90;
-        else if (sideWords) score += 24;
-        if (rightPanel) score += 22;
-        if (narrowRightEditablePanel) score += 62;
-        if (hasSideEditor) score += 36;
-        if (el.matches('[role="dialog"],[role="complementary"],aside')) score += 28;
-        if (hasUsefulText) score += Math.min(24, Math.floor(ownText.length / 90));
-        if (el.querySelector('[data-app-action-sidebar-thread-id],[data-app-action-sidebar-project-row]')) score -= 70;
-        if (mainComposerPattern.test(ownText)) score -= 70;
-        if (rect.left < 260 && rect.width < window.innerWidth * 0.55) score -= 20;
-        scored.push({ el, score, sideWords, rightPanel, editorCount: editors.length, rect: rectOf(el), text: ownText.slice(0, 260) });
+        if (el.matches('aside')) score += 80;
+        if (tablist) score += 45;
+        if (panel) score += 45;
+        if (hasSideEditor) score += 40;
+        if (rightPanel) score += 24;
+        if (rect.width <= Math.max(900, window.innerWidth * 0.68)) score += 12;
+        if (tabs.length) score += Math.min(32, tabs.length * 16);
+        const text = sideTextPreview(el);
+        scored.push({ el, score, sideWords: sidePattern.test(text), rightPanel, editorCount: editors.length, rect: rectOf(el), text });
       }
-      return scored.sort((a, b) => b.score - a.score || a.rect.w * a.rect.h - b.rect.w * b.rect.h);
+      return scored.sort((a, b) => b.score - a.score || b.rect.x - a.rect.x);
     };
     const findSideRoot = () => {
       const roots = candidateRoots();
-      return roots.find(item => item.score >= 55)?.el || null;
+      return roots.find(item => item.score >= 100)?.el || null;
     };
     const findSideEditor = root => {
       if (!root) return null;
@@ -6159,41 +6144,51 @@ function cdpSideChatDomHelpersSource() {
     };
     const readSideMessages = root => {
       if (!root) return [];
-      const blocks = [...root.querySelectorAll('[data-message-author-role],[data-role],article,[role="article"],.prose,p,li,pre,blockquote,div')]
+      const panel = root.querySelector('[role="tabpanel"]') || root;
+      const specific = [
+        ...panel.querySelectorAll('[aria-label*="编辑用户消息"],[class*="_markdownContent_"],[data-message-author-role]')
+      ].filter(visible);
+      const fallback = specific.length ? [] : [...panel.querySelectorAll('p,li,pre,blockquote')]
         .filter(visible)
-        .map(el => ({ el, text: normalize(el.innerText || el.textContent || '') }))
+        .filter(el => !el.closest(controlSelector));
+      const blocks = [...specific, ...fallback]
+        .map(el => {
+          const text = normalize(el.innerText || el.textContent || '');
+          const aria = normalize(el.getAttribute('aria-label') || '');
+          const raw = normalize([aria, el.getAttribute('data-message-author-role'), el.getAttribute('data-role'), el.className].join(' ')).toLowerCase();
+          let role = '';
+          if (/编辑用户消息|\\buser\\b|human|you/.test(raw)) role = 'user';
+          else if (/assistant|codex|agent|bot|ai|markdowncontent|助理/.test(raw)) role = 'assistant';
+          else role = nearestMessageRole(el);
+          return { el, role, text };
+        })
         .filter(item => {
           if (!item.text || item.text.length < 2) return false;
-          if (item.text.length > 6000) return false;
-          if (item.el.closest(controlSelector)) return false;
+          if (item.text.length > 8000) return false;
           const rect = item.el.getBoundingClientRect();
           if (rect.height < 8 || rect.width < 40) return false;
-          if (/^(发送|停止|取消|主线|侧聊|侧边聊天|Side|Main|New chat|新对话)$/.test(item.text)) return false;
+          if (/^(发送|停止|取消|主线|侧聊|侧边聊天|Side|Main|New chat|新对话|完全访问|超高|高|中|低)$/.test(item.text)) return false;
           return true;
         });
       const deduped = [];
       const seen = new Set();
       for (const item of blocks) {
-        const compact = item.text.slice(0, 500).toLowerCase();
-        if (seen.has(compact)) continue;
-        if (deduped.some(prev => prev.text.includes(item.text) && prev.text.length > item.text.length + 12)) continue;
-        seen.add(compact);
-        deduped.push({
-          role: nearestMessageRole(item.el),
-          text: item.text.slice(0, 2400),
-          rect: rectOf(item.el),
-        });
+        const key = item.role + ':' + item.text.slice(0, 700).toLowerCase();
+        if (seen.has(key)) continue;
+        if (deduped.some(prev => prev.role === item.role && prev.text.includes(item.text) && prev.text.length > item.text.length + 12)) continue;
+        seen.add(key);
+        deduped.push({ role: item.role, text: item.text.slice(0, 4000), rect: rectOf(item.el) });
       }
       return deduped.slice(-40);
     };
     const sideSnapshot = () => {
       const rootScores = candidateRoots().slice(0, 8);
-      const rootCandidate = rootScores.find(item => item.score >= 55 && item.rect.w <= 900) || null;
+      const rootCandidate = rootScores.find(item => item.score >= 100) || null;
       const root = rootCandidate ? rootCandidate.el : null;
       const editor = findSideEditor(root);
       const rootRect = root ? rectOf(root) : null;
       const editorRect = editor ? rectOf(editor) : null;
-      const rootText = root ? normalize(root.innerText || root.textContent || '') : '';
+      const rootText = root ? sideTextPreview(root) : '';
       const sideOpen = Boolean(root);
       const sideRunning = sideOpen && /(?:停止|stop|running|生成中|正在)/i.test(rootText);
       return {
@@ -6202,6 +6197,7 @@ function cdpSideChatDomHelpersSource() {
         sideOpen,
         sideRunning,
         canSendDirect: Boolean(editor),
+        tabs: readSideTabs(root),
         messages: readSideMessages(root),
         detail: {
           rootRect,
@@ -6238,10 +6234,6 @@ async function cdpSendCodexSideChat(text, threadId = '') {
       const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
       const root = findSideRoot();
       const editor = findSideEditor(root);
-      const rootRect = root ? root.getBoundingClientRect() : null;
-      if (rootRect && rootRect.width > 900) {
-        return { ok: false, code: 'SIDE_COMPOSER_MISSING', reason: '识别到的是主聊天区，不是侧聊面板', state: sideSnapshot() };
-      }
       if (!root || !editor) {
         return { ok: false, code: 'SIDE_COMPOSER_MISSING', reason: root ? '找不到侧聊输入框' : '侧聊面板未打开', state: sideSnapshot() };
       }
