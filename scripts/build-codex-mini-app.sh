@@ -8,7 +8,7 @@ APP_PATH="${APP_PATH:-/Applications/${APP_NAME}.app}"
 BUNDLE_ID="${BUNDLE_ID:-local.codex-mini.app}"
 SERVICE_LABEL="${SERVICE_LABEL:-codex-mini.local}"
 SUPPORT_DIR_NAME="${SUPPORT_DIR_NAME:-Codex Mini}"
-SERVICE_PORT="${SERVICE_PORT:-8787}"
+SERVICE_PORT="${SERVICE_PORT:-8788}"
 VERSION="${VERSION:-$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version", "1.0.0"))' "$PROJECT_DIR/package.json")}"
 BUILD_NUMBER="${BUILD_NUMBER:-${VERSION//./}}"
 XCODE_DIR="$PROJECT_DIR/macos/CodexMini"
@@ -150,6 +150,11 @@ set_plist_string "$INFO_PLIST" "CFBundleDevelopmentRegion" "zh_CN"
 set_plist_string "$INFO_PLIST" "CodexMiniServiceLabel" "$SERVICE_LABEL"
 set_plist_string "$INFO_PLIST" "CodexMiniSupportDirectoryName" "$SUPPORT_DIR_NAME"
 set_plist_string "$INFO_PLIST" "CodexMiniPort" "$SERVICE_PORT"
+/usr/libexec/PlistBuddy -c "Set :SUEnableAutomaticChecks false" "$INFO_PLIST" >/dev/null 2>&1 \
+  || /usr/libexec/PlistBuddy -c "Add :SUEnableAutomaticChecks bool false" "$INFO_PLIST" >/dev/null
+for key in SUFeedURL SUPublicEDKey SUScheduledCheckInterval; do
+  /usr/libexec/PlistBuddy -c "Delete :$key" "$INFO_PLIST" >/dev/null 2>&1 || true
+done
 
 rm -rf "$APP_PATH"
 mkdir -p "$(dirname "$APP_PATH")"

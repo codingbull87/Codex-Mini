@@ -10,7 +10,7 @@
   },
   "private": true,
   "name": "codex-mini",
-  "version": "3.0.5",
-  "description": "Local phone-to-Codex/Mac typing bridge",
+  "version": "4.2.1",
+  "description": "Self-use Codex Mini build: Android keyboard handling complete; conversation index fixed",
   "license": "SEE LICENSE IN LICENSE"
 }

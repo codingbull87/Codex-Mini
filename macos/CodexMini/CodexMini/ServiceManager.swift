@@ -54,7 +54,7 @@ final class ServiceManager: ObservableObject {
         self.appName = (info["CFBundleDisplayName"] as? String) ?? "Codex Mini"
         self.label = (info["CodexMiniServiceLabel"] as? String) ?? "codex-mini.local"
         self.supportDirectoryName = (info["CodexMiniSupportDirectoryName"] as? String) ?? "Codex Mini"
-        self.defaultPort = Int((info["CodexMiniPort"] as? String) ?? "") ?? 8787
+        self.defaultPort = Int((info["CodexMiniPort"] as? String) ?? "") ?? 8788
         self.port = defaultPort
     }
 
@@ -175,7 +175,20 @@ final class ServiceManager: ObservableObject {
             <key>MOBILE_TYPER_TOKEN</key><string>\(token.xmlEscaped)</string>
             <key>PORT</key><string>\(String(defaultPort))</string>
             <key>CODEX_MINI_APP_NAME</key><string>\(appName.xmlEscaped)</string>
-            <key>CODEX_MINI_STATE_DIR</key><string>\(homeDirectory.appendingPathComponent(".codex-mini").path.xmlEscaped)</string>
+            <key>CODEX_MINI_STATE_DIR</key><string>\(homeDirectory.appendingPathComponent(".codex-mini-beta").path.xmlEscaped)</string>
+            <key>CODEX_MINI_BETA</key><string>1</string>
+            <key>CODEX_MINI_LOCAL_ONLY</key><string>1</string>
+            <key>CODEX_MINI_RELAY_BASES</key><string></string>
+            <key>CODEX_MINI_DISABLE_BETA_TUNNEL</key><string>1</string>
+            <key>CODEX_MINI_FAST_THREAD_LIST</key><string>1</string>
+            <key>CODEX_MINI_THREAD_LIST_SCAN_LIMIT</key><string>120</string>
+            <key>CODEX_MINI_THREAD_DETAIL_INDEX_MAX_FILES</key><string>200</string>
+            <key>CODEX_MINI_THREAD_DETAIL_INDEX_START_DELAY_MS</key><string>60000</string>
+            <key>CODEX_MINI_THREAD_DETAIL_INDEX_REFRESH_MS</key><string>300000</string>
+            <key>CODEX_MINI_TASK_COMPLETION_NOTIFY_ENABLED</key><string>0</string>
+            <key>CODEX_MINI_MAX_ATTACHMENTS</key><string>0</string>
+            <key>CODEX_MINI_MAX_ATTACHMENT_BYTES</key><string>0</string>
+            <key>CODEX_MINI_MAX_BODY_BYTES</key><string>536870912</string>
           </dict>
           <key>ProgramArguments</key><array><string>\(nodePath.xmlEscaped)</string><string>\(installDirectory.appendingPathComponent("server.js").path.xmlEscaped)</string></array>
           <key>RunAtLoad</key><true/>
